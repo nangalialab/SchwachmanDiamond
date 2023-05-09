@@ -1,0 +1,23 @@
+group	number
+15q24-26Tetra	9
+EIF6	1
+EIF6_del	2
+7LOH	8
+RPL22	4
+RPL5	3
+SBDS	11
+TP53	6
+7q+	8
+7p-	8
+7q+,7p-	8
+7qLOH	8
+11+	10
+5qLOH	9
+GPR137B	12
+PRPF8	5
+chr15_cnv	9
+chr7_cnv	8
+none	10
+TP53-biallelic	7
+Wild Type	10
+WT	10

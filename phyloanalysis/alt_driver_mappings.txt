@@ -1,0 +1,16 @@
+driver3	driver
+15q24-26Tetra	chr15_cnv
+7LOH	chr7_cnv
+7q+,7p-	chr7_cnv
+7qLOH	chr7_cnv
+EIF6	EIF6
+EIF6:GPR137B	EIF6
+GPR137B	GPR137B
+PRPF8	PRPF8
+RPL22	RPL22
+RPL5	RPL5
+SBDS	SBDS
+TP53	TP53
+TP53,TP53,11+,5qLOH	TP53-biallelic
+WT	Wild Type
+EIF6_del	EIF6

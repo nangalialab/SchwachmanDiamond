@@ -1,0 +1,205 @@
+---
+title: "TimingSDS8"
+output: html_document
+date: '2022-06-30'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("load_and_annotate_tree.R")
+source("project_SDS.R")
+source("phylofit_with_offset.R")
+library("sigfit")
+```
+
+### Overdispersion of mutation counts in normal blood
+
+We estimate the expected overdispersion, here measured as the ratio of observed variance to Poisson variance, as a function of age using burdens from normal blood single cell derived colonies reported in Mitchell et al.
+```{r}
+dat=read.table("~/Downloads/normal_haematopoiesis-main/3_mutation_telomere_analysis/input/Summary_cut.csv",sep=",",header = TRUE)
+res=dat %>% group_by(donor_id,age) %>% summarise(nsub=mean(sub_adj),vsub=var(sub_adj),N=n())
+res %>% ggplot(aes(x=age,y=log(vsub/nsub)))+geom_point()+ylab("log(variance/burden)")+geom_smooth(method="lm")
+lm=lm(data=res %>% mutate(od=vsub/nsub),log(od)~age)
+par(mfrow=c(2,2))
+plot(lm)
+lod.pred=predict(lm,data.frame(age=25),interval = "confidence")
+print(exp(lod.pred))
+od.pred=exp(lod.pred[,"fit"]) ## convert back to OD as we did log-linear regression
+cat("predicted variance/burden=od=",od.pred)
+maxod=exp(lod.pred[,"upr"])
+cat("predicted max variance/burden=od=",maxod)
+ODF=od.pred
+ODF_MAX=maxod
+```
+
+
+##  Retrieve tree data for individuals
+
+```{r}
+pdd_cache="../cache/PDD.RDS"
+PDD=readRDS(pdd_cache)
+```
+## Retrieve SNVs called for representative SDS patients of the similar age to  SDS8  (SDS6,7 and 9) ("NormalSBS" signature)
+
+```{r}
+normal_snvs=do.call("rbind",
+                    lapply(c("SDS6","SDS7","SDS9"),
+                           function(x) PDD[[x]]$pdx$dat$details %>% 
+                             filter(TYPE=="SNV" & is_localx_excluded==0) %>% 
+                             dplyr::select(1:6)))
+normal_mut_matrix=with(normal_snvs,get_mut_matrix(Chrom,Pos,Ref,Alt))
+```
+
+## Retrieve SNVs that map to after acquistion ("MutantCloneSBS" signature)  and also those on the trunk ("TrunkSBS")
+Get all child branches of node 13 (see plot below):
+
+```{r}
+tt=plot_tree(PDD$SDS8$pdx$tree_ml,cex.label = 0)
+node_labels(tt,b_include_tips = TRUE)
+TRUNKNODE=13
+nodes=get_all_node_children(TRUNKNODE,PDD$SDS8$pdx$tree_ml)
+cat(nodes,"\n")
+mutant_clone_snvs=PDD$SDS8$pdx$dat$details %>% filter(TYPE=="SNV" & is_localx_excluded==0 & node %in% nodes )
+mt_mut_matrix=with(mutant_clone_snvs,get_mut_matrix(Chrom,Pos,Ref,Alt))
+trunk_snvs=PDD$SDS8$pdx$dat$details %>% filter(TYPE=="SNV" & is_localx_excluded==0 & node==TRUNKNODE)
+trunk_mut_matrix=with(trunk_snvs,get_mut_matrix(Chrom,Pos,Ref,Alt))
+cat("Found",nrow(trunk_snvs),"SNVs in non-masked regions on the trunk\n")
+```
+
+## The signatures are clearly quite different
+
+```{r}
+mutmat=cbind(normal_mut_matrix,mt_mut_matrix,trunk_mut_matrix)
+colnames(mutmat)=c("NormalSBS","MutantCloneSBS","TrunkSBS")
+plot_96_profile(mutmat)
+csm=cos_sim_matrix(mutmat,mutmat)
+print(csm)
+```
+
+## Estimate the Proportion of trunk SNVs that carry the "normal" signature
+Decompose "TrunkSBS" into a sum of "NormalSBS" and "MutantCloneSBS".  The number trunk variants attributed to "NormalSBS" gives a direct estimate of the mutation burden at transformation and hence an estimate of the timing of transformation:
+
+```{r}
+## normalise counts
+mutmatn=t(apply(mutmat,1,"/",colSums(mutmat)))
+##  Fit sit to signature using SigFit
+mcmcfit <- sigfit::fit_signatures(
+  counts = t(mutmat[,"TrunkSBS",drop=FALSE]),
+  signatures = t(mutmatn[,c("NormalSBS","MutantCloneSBS")]),
+  iter = 10000,warmup = 5000,chains = 1,seed = 1234567)
+exposures=retrieve_pars(mcmcfit,par="exposures",hpd_prob=0.95)
+print(exposures)
+## get approx standard error for subsequent use.
+se.approx=(exposures$upper_95["NormalSBS"]-exposures$lower_95["NormalSBS"])/(2*1.96)
+
+```
+
+Reconstruction :
+
+```{r sigfit_reconstruction,fig.width=25, fig.height=18.5, out.width='100%', warning=FALSE}
+par(mar=c(5,6,6.5,1))
+plot_reconstruction(mcmcfit)
+```
+
+## Convert the above into an estimate of the mutaton timing
+
+The number trunk variants attributed to "NormalSBS" gives a direct estimate of the mutation burden at transformation and hence an estimate of the timing of transformation.  We account for the intrinsic stochastic number of mutations acquired by a single cell at a given age using a simple ABC model that assumes the number of mutations acquired is negative binomial distributed with a mean that is itself uncertain because the mutation rate differs between individuals (random effect): 
+
+```{r}
+SLOPE=15.08998
+INTERCEPT=118.93678
+N_TRUNK_MUTS=693.5  # Adjusted mutation burden of trunk.
+SLOPE_SD=1
+PNORMAL_SBS=as.numeric(exposures$mean["NormalSBS"])
+PNORMAL_SBS_SE=as.numeric((exposures$upper_95["NormalSBS"]-exposures$lower_95["NormalSBS"])/(2*1.96)) ## approx stand error.
+
+lb.trunk.muts=N_TRUNK_MUTS*as.numeric(exposures$lower_95["NormalSBS"])
+ub.trunk.muts=N_TRUNK_MUTS*as.numeric(exposures$upper_95["NormalSBS"])
+cat(sprintf("Number of mutations attributed to NormalsSBS %4.1f (%4.1f-%4.1f)",N_TRUNK_MUTS*PNORMAL_SBS,lb.trunk.muts,ub.trunk.muts))
+set.seed(1234567)
+timing.abc=function( N=1e6,T=25){
+  t0=runif(N,0,T)
+  lambda=rnorm(N,SLOPE,SLOPE_SD)
+  intercept=INTERCEPT
+  od=ODF ##  This is age specific estimate based on the normal patients in Mitchell et al.
+  nsub=rnbinom(N,mu=lambda*t0+INTERCEPT,size=(lambda*t0+INTERCEPT)/(od-1))
+  nsub_sbs=round(N_TRUNK_MUTS*rtrunc(N,"norm",mean=PNORMAL_SBS,sd=PNORMAL_SBS_SE,a=0,b=1))
+  data.frame(nsub=nsub,nsub_sbs=nsub_sbs,t0=t0,lambda=lambda)
+}
+## Unconditional timing ()
+test=timing.abc(N=1e7,T=100)
+after.rejection.sampling=test %>% filter(nsub_sbs==nsub)
+hist(after.rejection.sampling$t0,xlab="Age(Years)",main="Estimated age at transformation event (Unconditional)",breaks=seq(0,50,1))
+cat("Number of samples after rejection sampling",dim(after.rejection.sampling)[1],"\n")
+print(quantile(after.rejection.sampling$t0,prob=c(0.025,0.5,0.975)))
+## Unconditional timing ()
+test=timing.abc(N=1e7,T=25)
+after.rejection.sampling=test %>% filter(nsub_sbs==nsub)
+cat("Number of samples after rejection sampling",dim(after.rejection.sampling)[1],"\n")
+hist(after.rejection.sampling$t0,xlab="Age(Years)",main="Estimated age at transformation event (Conditional)",breaks=seq(0,30,0.5))
+Q=quantile(after.rejection.sampling$t0,prob=c(0.025,0.5,0.975))
+print(Q)
+age.lower.bound=Q[1]+0.728268  ## Add in the typical post conception age at birth.
+age.median=Q[2]+0.728268  ## Add in the typical post conception age at birth.
+```
+
+### Estimation using phylofit
+
+We fit the ultrametric tree to the lowest likely age based on the data.  We introduce dummy samples so that we can localise the transformation event on a branch and fit the model accordingly.  
+```{r}
+nwstring=sprintf("((z:0,(z2:0,((b:141.0861791,d:113.2765587):50.45165081,((e:171.1492835,(g:164.5258234,(l:146.9439476,h:127.3626109):37.79341449,(i:137.4571178,k:154.9838747):24.59773156):1.256354434):10.00149207,(f:146.7538421,j:134.5303749):20.28401602):43.5048024):%4.3f):0):%4.3f,zeros:0);",N_TRUNK_MUTS*(1-PNORMAL_SBS),N_TRUNK_MUTS*PNORMAL_SBS)
+mt=read.tree(text=nwstring)
+mt$agedf=data.frame(tip.label=mt$tip.label)
+mt$agedf$age=c(age.lower.bound,age.lower.bound+1e-6,rep(25.728268,10),1e-6)
+mt$edge.length=round(mt$edge.length)
+ft=fit_tree(mt,switch_nodes = c(16),model="poisson_tree")
+par(mfcol=c(1,3))
+plot_tree(PDD$SDS8$pdx$tree_ml);title("Original Tree")
+tt=plot_tree(mt);title("Augmented Tree")
+tt=plot_tree(ft$ultratree);title("Fitted time-based tree")
+node_labels(tt)
+```
+
+We now estimate the selection using phylofit on the clade defined by node 17
+```{r}
+phylofit_early=fit_clade(ft$ultratree,node=17,nmutcolony = 10,nwtcolony =0,maxt=25.728,maxSYear = 20000,stan.control = list(adapt_delta=0.99))
+print(phylofit_early$res)
+```
+
+###  Selection estimate based on median age of transformation
+
+```{r}
+mt$agedf$age=c(age.median,age.median+1e-6,rep(25.728268,10),1e-6)
+ft2=fit_tree(mt,switch_nodes = c(16),model="poisson_tree")
+par(mfcol=c(1,2))
+tt=plot_tree(ft2$ultratree);title("Fitted time-based tree\n(Median Timing Estimate)",cex.main=0.7)
+tt=plot_tree(ft$ultratree);title("Fitted time-based tree\n(Lower Bound Timing Estimate",cex.main=0.7)
+```
+
+We now estimate the selection using phylofit on the clade defined by node 17
+```{r}
+phylofit_median=fit_clade(ft2$ultratree,node=17,nmutcolony = 10,nwtcolony =0,maxt=25.728,maxSYear = 20000,stan.control = list(adapt_delta=0.99))
+print(phylofit_median$res)
+```
+
+### Conservative estimate of the statistical significance of SDS8 mutation burden
+It will be observed that the colonies share a large part of their history. We can conservatively consider the colonies as a single colony and assess the chance of observing such an extreme burden under the null hypothesis that mutations were accrued according to a negative binomial distribution with a mean equal to the expected number of mutations (496) and a variance that is 2.24 times the mean:
+
+```{r}
+tips=PDD$SDS8$pdx$meta$clones_short
+tree=PDD$SDS8$pdx$tree_ml
+burden=nodeHeights(tree)[match(match(tips,tree$tip.label),tree$edge[,2]),2]
+hist(burden)
+burden=mean(burden)
+cat("Mean burden=",burden,"\n")
+pn=2*min(pnbinom(burden,mu=496,size=496/(ODF-1),lower.tail = FALSE),
+         pnbinom(burden,mu=496,size=496/(ODF-1),lower.tail = TRUE))
+cat("Negative Binomial based two sided p-value",pn)
+##  Recalculate using the upper end of the predicted over dispersion range 
+pn=2*min(pnbinom(burden,mu=496,size=496/(ODF_MAX-1),lower.tail = FALSE),
+         pnbinom(burden,mu=496,size=496/(ODF_MAX-1),lower.tail = TRUE))
+cat("Negative Binomial based two sided p-value",pn)
+```
+
+
+
