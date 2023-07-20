@@ -2,7 +2,7 @@ source("load_and_annotate_tree.R")
 source("project_SDS.R")
 source("paper_plot_functions.R")
 source("paper_export_functions.R")
-source("run_selection_analysis.R")
+source("run_timing_analysis_etc.R")
 VERSION="SUBMISSION"
 SELECTION_TREE_MODEL="poisson"
 ##  Load the data  
@@ -46,39 +46,17 @@ df=df %>% dplyr::select(-driver) %>% left_join(altm)
 dfo=df %>% dplyr::select(colony,age_at_sample_pcy,age_at_sample_exact,internal_id,nsub_adj,meandepth,meanvaf,driver)
 write.table(dfo,file=sprintf("../export/burden_by_sample_%s.txt",VERSION),quote=FALSE,sep = "\t",row.names = FALSE,col.names = TRUE)
 
-
-##  generate selection estimates
-selrescache=sprintf("../cache/selresl_%s.RDS",SELECTION_TREE_MODEL)
-if(!file.exists(selrescache)){
-  source("simple_sfit.R")
-  ##  Here we exclude from analysis the completely clonal samples SDS8
-  selresl=lapply(PDD[-8],function(PD) do_tree_selection(PD,b.use.nodes = TRUE,tree.model = "nb_tree"))
-  saveRDS(selresl,"../cache/selresl_nb.RDS")
-  selresl=lapply(PDD[-8],function(PD) do_tree_selection(PD,b.use.nodes = TRUE,tree.model = "poisson_tree"))
-  saveRDS(selresl,"../cache/selresl_poisson.RDS")
-}else{
-  selresl=readRDS(selrescache)
-}
-idx=which(sapply(selresl,length)>0)
-selres=collate_results(selresl[idx])
+timings=lapply(PDD[-8],function(PD) extract_timings(PD,b.use.nodes = TRUE,tree.model = "poisson_tree"))
+idx=which(sapply(timings,length)>0)
+timings=collate_results(timings[idx])
 ds=get_driver_scheme()
-selres$driver_orig=selres$driver
-selres$internal_id=selres$patient
-selres=selres %>% dplyr::select(-driver) %>% left_join(altm) %>% mutate(group=driver) %>% left_join(ds)
-fields=c("patient","node","start","end","nchild","ncolony",	"driver_long","driver_short","driver_group","lower",	"upper",	"t_lower_lb95",	"t_lower_ub95",	"t_lower_median",	"t_upper_lb95",	"t_upper_median",	"t_upper_ub95",	"S2.5%",	"Smean",
-         "S97.5%",	"Ssd")
-tmp=selres %>% mutate(driver_long=driver_orig,driver_short=driver3,driver_group=group,ncolony=N)
+timings$driver_orig=timings$driver
+timings$internal_id=timings$patient
+timings=timings %>% dplyr::select(-driver) %>% left_join(altm) %>% mutate(group=driver) %>% left_join(ds)
+fields=c("patient","node","start","end","nchild","ncolony",	"driver_long","driver_short","driver_group","lower",	"upper",	"t_lower_lb95",	"t_lower_ub95",	"t_lower_median",	"t_upper_lb95",	"t_upper_median",	"t_upper_ub95"
+         )
+tmp=timings %>% mutate(driver_long=driver_orig,driver_short=driver3,driver_group=group,ncolony=N)
 write.table(tmp[,fields],file="../export/selection_and_timing.txt",quote=FALSE,sep = "\t",row.names = FALSE,col.names = TRUE)
-##  The following also returns the per group metadata
-pdf(sprintf("../export/figure_3d_ALL_%s_%s.pdf",SELECTION_TREE_MODEL,VERSION),w=5,h=8,pointsize = 8)
-smeta=plot_selection_logscale( selres %>% mutate(flag=end<75),maxS=log(1+10))
-dev.off()
-
-pdf(sprintf("../export/figure_3d_%s_%s.pdf",SELECTION_TREE_MODEL,VERSION),w=5,h=5,pointsize = 8)
-devnull=plot_selection( selres %>% filter(end>=75) %>% (function(x) x[order(match(x$driver,smeta$driver)),]),maxS = 150)
-dev.off()
-
-##
 
 patients=c("SDS2", "SDS4" , "SDS5" , "SDS6","SDS10" )
 fl=collate_driver_info(PDD[patients])
@@ -102,7 +80,7 @@ lineagesummary=summarise_lineage_data(PDD,outstub = "../export/lineage_summary_C
 p1=plot_comp()
 p2=plot_comp(b.abs.scale = TRUE)
 pdf("../export/extended_figure_2.pdf",w=8,h=6,pointsize=10)
-gridExtra::grid.arrange(p1,p2,ncol=2)
+gridExtra::grid.arrange(p1,p2,ncol=1)
 dev.off()
 
 sink("../export/sessionInfo.txt")

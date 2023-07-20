@@ -168,12 +168,16 @@ plot_comp=function(b.abs.scale=FALSE){
   sf=scale_fill_manual(breaks=celltype$longstatus,values=celltype$col)
   
   if(!b.abs.scale){
-    p=ggplot(data=test2 %>% mutate(pct=nchild/N),aes(x=patient,y=100*pct,fill=longstatus)) +geom_bar(stat="identity",colour="black")+ylab("Cell Fraction(%)")+xlab("")+ guides(fill=guide_legend(title="")) + sf+ 
+    p=ggplot(data=test2 %>% mutate(pct=nchild/N),aes(x=patient,y=100*pct,fill=longstatus)) +geom_bar(stat="identity",colour="black",size=0.2)+ylab("Cell Fraction(%)")+xlab("")+ guides(fill=guide_legend(title="")) + sf+ 
       theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
+    ## Save plot data as text file.
+    write.table(test2 %>% mutate(pct=nchild/N),file=sprintf("../export/clonal_proportions_%s.txt",VERSION),quote=FALSE,sep = "\t",row.names = FALSE,col.names = TRUE)
+    
   }else{
-    p=ggplot(data=test2,aes(x=patient,y=nchild,fill=longstatus)) +geom_bar(stat="identity",colour="black")+ylab("Colony Count")+xlab("")+ guides(fill=guide_legend(title="")) + sf+ 
+    p=ggplot(data=test2,aes(x=patient,y=nchild,fill=longstatus)) +geom_bar(stat="identity",colour="black",size=0.2)+ylab("Colony Count")+xlab("")+ guides(fill=guide_legend(title="")) + sf+ 
       theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(), axis.line = element_line(colour = "black"))
   }
+  
   p
 }
 

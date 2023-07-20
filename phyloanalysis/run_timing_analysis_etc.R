@@ -40,7 +40,7 @@ get_lineages3=function(tree,threshold,min.count=2){
   }
   out %>% filter(N>=min.count)
 }
-do_tree_selection=function(PD,threshold=50,min.count=2,tree.model="nb_tree",b.use.nodes=FALSE){
+extract_timings=function(PD,threshold=50,min.count=2,tree.model="nb_tree",b.use.nodes=FALSE){
   mtree=PD$pdx$tree_ml
   treefitres=PD$fit[[tree.model]]$null
   if(!b.use.nodes){
@@ -52,10 +52,10 @@ do_tree_selection=function(PD,threshold=50,min.count=2,tree.model="nb_tree",b.us
     return(NULL)
   }
   lineages=lineages %>% left_join(PD$nodes[,c("node","driver3","driver")])
-  do_tree_selection_raw(mtree,treefitres,lineages)
+  do_tree_timings_raw(mtree,treefitres,lineages)
 }
 
-do_tree_selection_raw=function(mtree,treefitres,lineages){
+do_tree_timings_raw=function(mtree,treefitres,lineages){
   #lineages=get_lineages(mtree,threshold=threshold,min.count=min.count )
   tree=get_treefit_ci(treefitres)
   nh=nodeHeights(tree)
@@ -80,33 +80,7 @@ do_tree_selection_raw=function(mtree,treefitres,lineages){
   for(field in c("lower_lb95","lower_ub95","lower_median","upper_lb95","upper_median","upper_ub95")){
     lineages[[sprintf("t_%s",field)]]=tree[[field]][idx]
   }
-  sfit=lapply(1:length(lineages$node),function(i) {
-    node=lineages$node[i]
-    tmp=data.frame(samples=get_samples_in_clade(node,tree))
-    tmp$age=nh[match(match(tmp$samples,tree$tip.label),tree$edge[,2]),2]
-    nmutcolony=sapply(ts,function(t) length(which(tmp$age==t)))
-    if(length(ts)>1){
-      ##Fit using fit_Smt
-      #browser()
-      res=fit_Smt(nmutcolony = nmutcolony,nwtcolony = nwtcolony,ts=ts,
-                  tmin=lineages$lower[i],tmax=lineages$upper[i],
-                  LNmin = log(1e4),
-                  LNmax=log(2e5),niter = 20000,
-                  nchain = 3,
-                  stan.control = list(adapt_delta=0.99))
-    }else{
-      res=fit_S(nmutcolony = length(tmp$samples),nwtcolony = length(wt.clones),T=ts,
-                tmin=lineages$lower[i],tmax=lineages$upper[i],
-                LNmin = log(1e4),
-                LNmax=log(2e5),niter = 20000,
-                nchain = 3,
-                stan.control = list(adapt_delta=0.99))
-      
-    }
-    ##Get S
-    summary(res$res)$summary
-  })
-  list(lineages=cbind(lineages,t(sapply(sfit,function(x) x["S",c("2.5%","mean","97.5%","sd")])) %>% (function(x){colnames(x)=sprintf("S%s",colnames(x));x})),sfit=sfit)
+  list(lineages=lineages)
 }
 
 
@@ -136,56 +110,7 @@ get_treefit_ci=function(treefit){
   tree
 }
 
-# Estimating Selection
 
-plot_selection_results=function(selres,mutcount,legpos="right",maxS=-1,b.add.id=FALSE){
- 
-  #tmp=tmp %>% left_join(cohort)
-  selres[,grep("^S",colnames(selres))]=100*selres[,grep("^S",colnames(selres))]
-  if(maxS<0){
-  maxS=ceiling(max(selres$`S97.5%`))
-  }
-  par(mfcol=c(2,1))
-  
-  if(mutcount>0){
-    extra=sprintf("from Expansions subsequent to %d Mutations",mutcount)
-    selres=selres[order(selres$end),]
-    tmp=unique(selres[,c("patient","col")])
-    selres$pch=19
-  }else{
-    extra="for Identified Drivers"
-    selres=selres[order(selres$driver3),]
-    tmp=unique(selres[,c("driver3","col")])
-    PCH=data.frame(patient=unique(selres$patient))
-    PCH$pch=(0:25)[-4][1:length(PCH$patient)]
-    selres=selres %>% left_join(PCH)
-    #selres$pch=19
-    b.add.id=TRUE
-  }
-  plot(NULL,xlim=c(-0.15*maxS,maxS*1.0),ylim=c(0,dim(selres)[1]+2),axes=F,xlab="Selection Coefficient (%)",ylab="",main=sprintf("Selection Coefficients %s",extra))
-  #browser()
-  segments(x0=selres$`S2.5%`,x1=selres$`S97.5%`,y0=1:dim(selres)[1],lwd=3,lend=2,col=selres$col)
-  points(x=selres$Smean,y=1:dim(selres)[1],pch=selres$pch,col=selres$col,cex=1.5)
-  if(!is.null(tmp$patient)){
-    legend(legpos,tmp$patient,lwd=3,col=tmp$col,ncol=2,bty="n")
-  }
-  if(!is.null(tmp$driver3)){
-    legend(legpos,tmp$driver3,lwd=3,col=tmp$col,ncol=2,bty="n")
-  }
-  text(x=-0.1*maxS,y=1:dim(selres)[1],labels=selres$N)
-  text(x=-0.1*maxS,y=dim(selres)[1]+1.5,labels="Clade Size")
-  if(b.add.id){
-    #text(x=-0.2*maxS,y=1:dim(selres)[1],labels=selres$patient,pos = 4,offset = 0,cex=0.6)
-    legend("topright",PCH$patient,pch=PCH$pch,ncol=length(PCH$pch),bty = "n")
-  }
-  abline(v=seq(0,maxS,50),lty="dotted")
-  axis(side = 1,at=seq(0,maxS,50))
-  plot(NULL,ylim=c(0,maxS),xlim=c(0,300),pch=19,ylab="Selection Coefficient (%)",xlab="Branch Timings (Mutation Count)")
-  rect(xleft=0,xright = 50,ybottom = -1,ytop=maxS+1,col="pink",border=NA)
-  points(selres$end,selres$Smean,pch=19)
-  segments(x0=selres$start,x1=selres$end,y0=selres$Smean,lwd=0.5,col=selres$col)
-  segments(x0=selres$end,y0=selres$`S2.5%`,y1=selres$`S97.5%`,lwd=2,col=selres$col)
-}
 
 collate_results=function(zz){
   cdf=getcolor_df(cohort %>% (function(x){x$patient=x$id;x}))
@@ -290,212 +215,6 @@ plot_all_trees=function(PDD,selres,mutcount){
 ## Based on ordering in meta-analysis - manual for now..
 ogene=c("chr15_cnv","chr7_cnv","EIF6","RPL22","RPL5","TP53","PRPF8","GPR137B")
 
-plot_selection_vs_mutcount=function(selres,maxS=max(100*ceiling(selres$`S97.5%`))){
-  plot(NULL,ylim=c(0,maxS),xlim=c(0,300),pch=19,ylab="Selection Coefficient (%)",xlab="Branch Timings (Mutation Count)")
-  rect(xleft=0,xright = 50,ybottom = -1,ytop=maxS+1,col="pink",border=NA)
-  points(selres$end,100*selres$Smean,pch=19,col=selres$colour)
-  segments(x0=selres$start,x1=selres$end,y0=100*selres$Smean,lwd=0.5,col=selres$colour,lend=2)
-  segments(x0=selres$end,y0=100*selres$`S2.5%`,y1=100*selres$`S97.5%`,lwd=3,col=selres$colour,lend=2)
-  leg=unique(selres[order(selres$driver,decreasing = TRUE),c("driver","colour")])
-  legend("right",leg$driver,col=leg$colour,lwd=3,cex=1)
-}
-
-plot_selection=function(selres,maxS=max(100*ceiling(selres$`S97.5%`))){
-  tmp=selres #[order(selres$driver),]
-  #maxS=max(tmp$`S97.5%`)
-  #plot(NULL,xlim=c(0,100*ceiling(maxS)),ylim=c(0,dim(tmp)[1]+length(unique(tmp$driver))),yaxt="n",
-  N=dim(tmp)[1]
-  groups=unique(tmp$driver)
-  plot(NULL,xlim=c(-maxS,maxS),ylim=c(0,N+length(groups)),yaxt="n",
-       xlab="",
-       ylab="",xaxt="n",cex.lab=1.5)
-  axis(side = 1,at=seq(0,maxS,50))
-  abline(v=seq(0,maxS,50),col="grey",lwd=0.5)
-  #browser()
-  mtext(text = "Selection Coefficient(%)",side=1,at = 0.5*maxS,cex=1,line=3)
-  #abline(h=N+2*length(groups)+1,lty="dotted")
-  k=N+length(groups)
-  summarystat=data.frame(driver=groups,stringsAsFactors = FALSE)
-  summarystat$mean=NA
-  p=1
-  for(group in groups){
-    #abline(h=k+0.5,lty="dotted",col="grey")
-    idx=which(tmp$driver==group)
-    midy=mean(k-(1:length(idx))+1)
-    for(i in idx){
-      segments(x0=100*tmp$`S2.5%`[i],x1=100*tmp$`S97.5%`[i],y0=k,lwd=2,col=tmp$colour[i],lend=2)
-      points(x=100*tmp$Smean[i],y=k,pch=18,cex=2,lwd=2)
-      text(x=-1*maxS,y=k,sprintf("%-5s",tmp$internal_id[i]),cex=1,pos = 4)#tmp$driver[i]))
-      text(x=-0.8*maxS,y=k,sprintf("%s",tmp$driver_orig[i]),cex=1,pos = 4)#tmp$driver[i]))
-      
-      k=k-1
-    }
-    #text(x=-0.95*maxS,y=midy,labels=group,col=tmp$colour[idx[1]],pos=4)
-    
-    if(length(idx)>1){
-      fer=rma(yi = 100*tmp$Smean[idx],sei = 100*tmp$Ssd[idx])
-    }else{
-      row=tmp[idx,]
-      fer=list(ci.lb=100*row$`S2.5%`,ci.ub=100*row$`S97.5%`,beta=100*row$Smean)
-    }
-    dwidth=0.2
-    polygon(x=c(fer$ci.lb,fer$beta,fer$ci.ub,fer$beta),y=c(k,k+dwidth,k,k-dwidth),col=tmp$colour[idx[1]])
-    text(x=-1*maxS,y=k,labels=group,col=tmp$colour[idx[1]],pos=4,font=2)
-    abline(h=k+c(-0.5,0.5),col="black")#lty="dotted",col="grey")
-    k=k-1
-    #abline(h=k,lty="dotted",col="grey")
-    #k=k-1
-    summarystat$mean[p]=fer$beta
-    p=p+1
-  }
-  #leg=unique(tmp[,c("driver","colour")])
-  #legend("right",leg$driver,col=leg$colour,lwd=3)
-
-  summarystat
-  
-}
-
-mlog2=function(splus1){
-  log(2)/log(splus1)
-}
-plot_selection_doublingtime=function(selres,maxS=ceiling(max(mlog2(1+selres$`S2.5%`)))){
-  if(is.null(selres$flag)){
-    selres$flag=FALSE
-  }
-  tmp=selres[order(selres$driver),]
-  #maxS=max(tmp$`S97.5%`)
-  #plot(NULL,xlim=c(0,100*ceiling(maxS)),ylim=c(0,dim(tmp)[1]+length(unique(tmp$driver))),yaxt="n",
-  N=dim(tmp)[1]
-  groups=unique(tmp$driver)
-  plot(NULL,xlim=c(-maxS,maxS),ylim=c(0,N+2*length(groups)+1),yaxt="n",
-       xlab="Doubling Time (Years)",
-       ylab="",xaxt="n")
-  axis(side = 1,at=seq(0,maxS,1))
-  abline(v=seq(0,maxS,50),col="grey",lwd=0.5)
-  #browser()
-  
-  #abline(h=N+2*length(groups)+1,lty="dotted")
-  k=N+2*length(groups)
-  summarystat=data.frame(driver=groups,stringsAsFactors = FALSE)
-  for(group in groups){
-    #abline(h=k+0.5,lty="dotted",col="grey")
-    idx=which(tmp$driver==group)
-    midy=mean(k-(1:length(idx))+1)
-    for(i in idx){
-      segments(x0=mlog2(1+tmp$`S2.5%`[i]),x1=mlog2(1+tmp$`S97.5%`[i]),y0=k,lwd=2,col=tmp$colour[i],lend=2)
-      points(x=mlog2(1+tmp$Smean[i]),y=k,pch=18,cex=2,lwd=2)
-      text(x=-0.95*maxS,y=k,sprintf("%-5s      %s",tmp$internal_id[i],tmp$driver_orig[i]),cex=1,pos = 4)#tmp$driver[i]))
-      if(tmp$flag[i]){
-        text(x=0.98*maxS,y=k,"*")
-      }
-      k=k-1
-    }
-    #text(x=-0.95*maxS,y=midy,labels=group,col=tmp$colour[idx[1]],pos=4)
-    idx=which(tmp$driver==group & !tmp$flag)
-    if(length(idx)>1){
-      fer=rma(yi =tmp$Smean[idx],sei = tmp$Ssd[idx])
-      fer=list(ci.lb=mlog2(1+fer$ci.ub),ci.ub=mlog2(1+fer$ci.lb),beta=mlog2(1+fer$beta))
-    }else if(length(idx)==1){
-      row=tmp[idx,]
-      fer=list(ci.ub=mlog2(1+row$`S2.5%`),ci.lb=mlog2(1+row$`S97.5%`),beta=mlog2(1+row$Smean))
-    }
-    if(length(idx)>0){
-    dwidth=0.2
-    polygon(x=c(fer$ci.lb,fer$beta,fer$ci.ub,fer$beta),y=c(k,k+dwidth,k,k-dwidth),col=tmp$colour[idx[1]])
-    text(x=-0.95*maxS,y=k,labels=group,col=tmp$colour[idx[1]],pos=4)
-    abline(h=k+c(-0.5,0.5),col="black")#lty="dotted",col="grey")
-    }else{
-      abline(h=k+c(-0.5,0.5),col="black")#lty="dotted",col="grey")
-    }
-    k=k-1
-    #abline(h=k,lty="dotted",col="grey")
-    k=k-1
-  }
-  #leg=unique(tmp[,c("driver","colour")])
-  #legend("right",leg$driver,col=leg$colour,lwd=3)
-  
-  
-}
-
-
-plot_selection_logscale=function(selres,maxS=max(ceiling(log(1+selres$`S97.5%`)))){
-  mlog2=function(x){log(x)}
-  if(is.null(selres$flag)){
-    selres$flag=FALSE
-  }
-  tmp=selres#[order(selres$driver),]
-  #maxS=max(tmp$`S97.5%`)
-  #plot(NULL,xlim=c(0,100*ceiling(maxS)),ylim=c(0,dim(tmp)[1]+length(unique(tmp$driver))),yaxt="n",
-  N=dim(tmp)[1]
-  groups=unique(tmp$driver)
-  plot(NULL,xlim=c(-maxS,maxS),ylim=c(0,N+2*length(groups)+1),yaxt="n",
-       xlab="Selection Coefficient",
-       ylab="",xaxt="n")
-  lticks=1:floor(exp(maxS))
-  ticks=log(lticks)
-  #browser()
-  #labs=ifelse(round((exp(ticks)-1)) %in% c(0,1,2,5,10),sprintf("%3.0f",100*(exp(ticks)-1)),"")
-  #axis(side = 1,at=log(1:floor(exp(maxS))),labels = sprintf("%3.0f",100*((1:floor(exp(maxS)))-1)))
-  axis(side = 1,at=ticks,labels = FALSE)
-  rticks=c(0,1,5,10)
-  mtext(side = 1,line = 1,at = log(rticks+1),text = sprintf("%3.0f",100*rticks))
-  abline(v=ticks,col="grey",lwd=0.5)
-  #browser()
-  
-  #abline(h=N+2*length(groups)+1,lty="dotted")
-  k=N+2*length(groups)
-  summarystat=data.frame(driver=groups,mean=NA,S_lb95=NA,S_ub95=NA,N=0,stringsAsFactors = FALSE)
-  p=1
-
-  for(group in groups){
-    #abline(h=k+0.5,lty="dotted",col="grey")
-    idx=which(tmp$driver==group)
-    midy=mean(k-(1:length(idx))+1)
-    maxb=-1
-    for(i in idx){
-      segments(x0=mlog2(1+tmp$`S2.5%`[i]),x1=mlog2(1+tmp$`S97.5%`[i]),y0=k,lwd=2,col=tmp$colour[i],lend=2)
-      points(x=mlog2(1+tmp$Smean[i]),y=k,pch=18,cex=2,lwd=2)
-      text(x=-0.95*maxS,y=k,sprintf("%-5s      %s",tmp$internal_id[i],tmp$driver_orig[i]),cex=1,pos = 4)#tmp$driver[i]))
-      if(tmp$flag[i]){
-        text(x=0.98*maxS,y=k,"*")
-      }
-      k=k-1
-      if(mlog2(1+tmp$Smean[i])>maxb){
-        maxb=mlog2(1+tmp$Smean[i])
-      }
-    }
-    #text(x=-0.95*maxS,y=midy,labels=group,col=tmp$colour[idx[1]],pos=4)
-    idx=which(tmp$driver==group & !tmp$flag)
-    if(length(idx)>1){
-      fer=rma(yi =tmp$Smean[idx],sei = tmp$Ssd[idx])
-      fer=list(ci.lb=mlog2(1+fer$ci.lb),ci.ub=mlog2(1+fer$ci.ub),beta=mlog2(1+fer$beta))
-    }else if(length(idx)==1){
-      row=tmp[idx,]
-      fer=list(ci.lb=mlog2(1+row$`S2.5%`),ci.ub=mlog2(1+row$`S97.5%`),beta=mlog2(1+row$Smean))
-    }
-    if(length(idx)>0){
-      dwidth=0.2
-      polygon(x=c(fer$ci.lb,fer$beta,fer$ci.ub,fer$beta),y=c(k,k+dwidth,k,k-dwidth),col=tmp$colour[idx[1]])
-      text(x=-0.95*maxS,y=k,labels=group,col=tmp$colour[idx[1]],pos=4)
-      abline(h=k+c(-0.5,0.5),col="black")#lty="dotted",col="grey")
-    }else{
-      fer=list(beta=maxb,ci.lb=NA,ci.ub=NA)
-      abline(h=k+c(-0.5,0.5),col="black")#lty="dotted",col="grey")
-    }
-    k=k-1
-    #abline(h=k,lty="dotted",col="grey")
-    k=k-1
-    summarystat$mean[p]=exp(fer$beta)-1
-    summarystat$S_lb95[p]=exp(fer$ci.lb)-1
-    summarystat$S_ub95[p]=exp(fer$ci.ub)-1
-    summarystat$N[p]=length(idx)
-    p=p+1
-  }
-  #leg=unique(tmp[,c("driver","colour")])
-  #legend("right",leg$driver,col=leg$colour,lwd=3)
-  summarystat
-  
-}
 
 get_expansion_stats=function(tree){
   N=length(setdiff(tree$tip.label,"zeros"))
